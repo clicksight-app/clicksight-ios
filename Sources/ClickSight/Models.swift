@@ -216,6 +216,54 @@ public struct AnyCodable: Codable, Equatable {
     }
 }
 
+// MARK: - Crash Report Payload
+
+/// Crash report sent to the dedicated /api/app-analytics/crash endpoint
+struct CrashPayload: Codable {
+    let apiKey: String
+    let distinctId: String
+    let crashType: String
+    let message: String
+    let stackTrace: String
+    let isFatal: Bool
+    let breadcrumbs: [Breadcrumb]
+    let context: CrashContext
+    
+    enum CodingKeys: String, CodingKey {
+        case breadcrumbs, context, message
+        case apiKey = "api_key"
+        case distinctId = "distinct_id"
+        case crashType = "crash_type"
+        case stackTrace = "stack_trace"
+        case isFatal = "is_fatal"
+    }
+}
+
+/// A breadcrumb records a user action leading up to a crash
+public struct Breadcrumb: Codable {
+    public let timestamp: String
+    public let action: String
+    public let category: String
+    
+    public init(timestamp: String, action: String, category: String) {
+        self.timestamp = timestamp
+        self.action = action
+        self.category = category
+    }
+}
+
+/// Context included with crash reports
+struct CrashContext: Codable {
+    let appVersion: String
+    let os: OSInfo
+    let device: DeviceDetails
+    
+    enum CodingKeys: String, CodingKey {
+        case os, device
+        case appVersion = "app_version"
+    }
+}
+
 // MARK: - Dictionary extension for easy AnyCodable conversion
 
 public extension Dictionary where Key == String, Value == Any {

@@ -14,9 +14,9 @@ final class NetworkManager {
         self.apiHost = apiHost
         
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 60
-        config.waitsForConnectivity = true
+        config.timeoutIntervalForRequest = 10  // 10s request timeout (was 30)
+        config.timeoutIntervalForResource = 30 // 30s total (was 60)
+        // NOTE: Do NOT set waitsForConnectivity — it can hang indefinitely if host is unreachable
         self.session = URLSession(configuration: config)
         
         self.encoder = JSONEncoder()
@@ -65,6 +65,21 @@ final class NetworkManager {
                 completion(true)
             case .failure(let error):
                 Logger.log("Failed to identify: \(error.localizedDescription)", level: .error)
+                completion(false)
+            }
+        }
+    }
+    
+    // MARK: - Crash Reporting
+    
+    /// Send a crash report to the dedicated crash endpoint
+    func sendCrash(_ payload: CrashPayload, completion: @escaping (Bool) -> Void) {
+        post(endpoint: "/api/app-analytics/crash", body: payload) { result in
+            switch result {
+            case .success:
+                completion(true)
+            case .failure(let error):
+                Logger.log("Failed to send crash report: \(error.localizedDescription)", level: .error)
                 completion(false)
             }
         }

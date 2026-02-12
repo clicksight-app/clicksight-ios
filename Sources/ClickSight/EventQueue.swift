@@ -5,12 +5,15 @@ final class EventQueue {
     
     private var events: [ClickSightEvent] = []
     private let lock = NSLock()
-    private var flushTimer: Timer?
+    private var flushTimer: DispatchSourceTimer?
     private let networkManager: NetworkManager
     private let maxBatchSize: Int
     private let maxQueueSize: Int
     private let flushInterval: Int
     private var isFlushing = false
+    
+    /// Background queue for flush timer — never blocks main thread
+    private let timerQueue = DispatchQueue(label: "co.clicksight.flush", qos: .utility)
     
     init(networkManager: NetworkManager, maxBatchSize: Int, maxQueueSize: Int, flushInterval: Int) {
         self.networkManager = networkManager
@@ -47,7 +50,9 @@ final class EventQueue {
         
         // Auto-flush if we've hit the batch size
         if events.count >= maxBatchSize {
-            flush()
+            timerQueue.async { [weak self] in
+                self?.flush()
+            }
         }
     }
     
@@ -103,18 +108,18 @@ final class EventQueue {
     // MARK: - Timer
     
     private func startFlushTimer() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.flushTimer?.invalidate()
-            self.flushTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(self.flushInterval), repeats: true) { [weak self] _ in
-                self?.flush()
-            }
+        let timer = DispatchSource.makeTimerSource(queue: timerQueue)
+        timer.schedule(deadline: .now() + .seconds(flushInterval), repeating: .seconds(flushInterval))
+        timer.setEventHandler { [weak self] in
+            self?.flush()
         }
+        timer.resume()
+        self.flushTimer = timer
     }
     
     /// Stop the flush timer (called on app termination)
     func stopTimer() {
-        flushTimer?.invalidate()
+        flushTimer?.cancel()
         flushTimer = nil
     }
     

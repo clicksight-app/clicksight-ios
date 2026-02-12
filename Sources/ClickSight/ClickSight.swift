@@ -22,7 +22,7 @@ import Foundation
 public final class ClickSight {
     
     /// SDK version
-    public static let sdkVersion = "1.0.0"
+    public static let sdkVersion = "1.0.2"
     
     /// Internal core instance
     private static var core: ClickSightCore?
@@ -37,6 +37,7 @@ public final class ClickSight {
     /// Initialise the ClickSight SDK with your API key
     ///
     /// Call this once at app launch, before any tracking calls.
+    /// Initialization is designed to be non-blocking and safe to call on the main thread.
     ///
     /// - Parameters:
     ///   - apiKey: Your ClickSight project API key (format: cs_app_live_xxxxx)
@@ -53,24 +54,13 @@ public final class ClickSight {
             return
         }
         
+        // Create core synchronously (lightweight) but defer heavy work to background
         core = ClickSightCore(apiKey: apiKey, options: options)
     }
     
     // MARK: - Event Tracking
     
     /// Track a custom event
-    ///
-    /// - Parameters:
-    ///   - event: Event name (use snake_case, e.g. "add_to_cart")
-    ///   - properties: Optional dictionary of event properties
-    ///
-    /// ```swift
-    /// ClickSight.track("purchase_completed", properties: [
-    ///     "order_id": "ORD_123",
-    ///     "total": 49.99,
-    ///     "currency": "GBP"
-    /// ])
-    /// ```
     public static func track(_ event: String, properties: [String: Any] = [:]) {
         guard let core = core else {
             Logger.isEnabled = true
@@ -83,19 +73,6 @@ public final class ClickSight {
     // MARK: - Screen Tracking
     
     /// Track a screen view
-    ///
-    /// Screen views are automatically captured for UIKit view controllers if
-    /// `captureScreenViews` is enabled. Use this method for SwiftUI views or
-    /// when you need to add custom properties.
-    ///
-    /// - Parameters:
-    ///   - name: Screen name (e.g. "ProductDetail", "Cart", "Checkout")
-    ///   - properties: Optional dictionary of screen properties
-    ///
-    /// ```swift
-    /// // In SwiftUI .onAppear
-    /// ClickSight.screen("ProductDetail", properties: ["product_id": "SKU123"])
-    /// ```
     public static func screen(_ name: String, properties: [String: Any] = [:]) {
         guard let core = core else {
             Logger.isEnabled = true
@@ -108,21 +85,6 @@ public final class ClickSight {
     // MARK: - User Identity
     
     /// Identify a user — links their anonymous activity to their known identity
-    ///
-    /// Call this when a user logs in or when you know who they are.
-    /// All previous anonymous events will be linked to this user.
-    ///
-    /// - Parameters:
-    ///   - userId: Your unique user identifier (string)
-    ///   - traits: Optional user properties (email, name, plan, etc.)
-    ///
-    /// ```swift
-    /// ClickSight.identify(userId: "user_456", traits: [
-    ///     "email": "ryan@example.com",
-    ///     "name": "Ryan",
-    ///     "plan": "premium"
-    /// ])
-    /// ```
     public static func identify(userId: String, traits: [String: Any] = [:]) {
         guard let core = core else {
             Logger.isEnabled = true
@@ -139,9 +101,6 @@ public final class ClickSight {
     }
     
     /// Reset user identity — call this when the user logs out
-    ///
-    /// This generates a new anonymous ID and clears stored user data.
-    /// Future events will be tracked under the new anonymous identity.
     public static func reset() {
         guard let core = core else { return }
         core.reset()
@@ -150,17 +109,6 @@ public final class ClickSight {
     // MARK: - Super Properties
     
     /// Register properties that will be sent with every event
-    ///
-    /// Useful for properties like app theme, user segment, or A/B test group.
-    ///
-    /// - Parameter properties: Dictionary of properties to include in all events
-    ///
-    /// ```swift
-    /// ClickSight.registerSuperProperties([
-    ///     "app_theme": "dark",
-    ///     "user_segment": "premium"
-    /// ])
-    /// ```
     public static func registerSuperProperties(_ properties: [String: Any]) {
         guard let core = core else { return }
         core.registerSuperProperties(properties)
@@ -181,36 +129,18 @@ public final class ClickSight {
     // MARK: - Feature Flags
     
     /// Check if a feature flag is enabled for the current user
-    ///
-    /// Returns the cached value. Call `reloadFeatureFlags()` to refresh.
-    ///
-    /// - Parameter key: The feature flag key
-    /// - Returns: Whether the flag is enabled
-    ///
-    /// ```swift
-    /// if ClickSight.featureFlag("new_checkout_flow") {
-    ///     showNewCheckout()
-    /// }
-    /// ```
     public static func featureFlag(_ key: String) -> Bool {
         guard let core = core else { return false }
         return core.featureFlag(key)
     }
     
     /// Get the payload for a feature flag
-    ///
-    /// Some feature flags include a JSON payload with additional configuration.
-    ///
-    /// - Parameter key: The feature flag key
-    /// - Returns: The payload dictionary, or nil if not set
     public static func featureFlagPayload(_ key: String) -> [String: Any]? {
         guard let core = core else { return nil }
         return core.featureFlagPayload(key)
     }
     
     /// Reload feature flags from the server
-    ///
-    /// Call this after identify() or when you need fresh flag values.
     public static func reloadFeatureFlags() {
         guard let core = core else { return }
         core.reloadFeatureFlags()
@@ -218,15 +148,30 @@ public final class ClickSight {
     
     // MARK: - Privacy
     
-    /// Opt the user in or out of tracking
-    ///
-    /// When opted out, no events will be captured or sent.
-    /// Use this for GDPR compliance.
-    ///
-    /// - Parameter optedOut: Whether to disable tracking
+    /// Opt the user in or out of tracking (for GDPR compliance)
     public static func setOptOut(_ optedOut: Bool) {
         guard let core = core else { return }
         core.setOptOut(optedOut)
+    }
+    
+    /// Report a non-fatal error — useful for caught exceptions and handled errors
+    ///
+    /// ```swift
+    /// do {
+    ///     try riskyOperation()
+    /// } catch {
+    ///     ClickSight.reportError(error, isFatal: false)
+    /// }
+    /// ```
+    public static func reportError(_ error: Error, isFatal: Bool = false) {
+        guard let core = core else { return }
+        let nsError = error as NSError
+        core.sendCrashReport(
+            crashType: nsError.domain,
+            message: error.localizedDescription,
+            stackTrace: Thread.callStackSymbols.joined(separator: "\n"),
+            isFatal: isFatal
+        )
     }
     
     /// Whether the user has opted out of tracking
@@ -237,12 +182,29 @@ public final class ClickSight {
     // MARK: - Queue Management
     
     /// Force flush all queued events to the server immediately
-    ///
-    /// Events are normally flushed automatically on a timer.
-    /// Call this when you need events sent immediately (e.g. before the app closes).
     public static func flush() {
         guard let core = core else { return }
         core.flush()
+    }
+    
+    // MARK: - Breadcrumbs
+    
+    /// Add a breadcrumb — records user actions for crash context
+    ///
+    /// Breadcrumbs are automatically added for screen views and tracked events.
+    /// Use this to manually add breadcrumbs for UI interactions, API calls, etc.
+    ///
+    /// - Parameters:
+    ///   - action: Description of the action (e.g. "Tapped checkout", "API call failed")
+    ///   - category: Category of the action (e.g. "interaction", "network", "navigation")
+    ///
+    /// ```swift
+    /// ClickSight.addBreadcrumb(action: "Tapped checkout button", category: "interaction")
+    /// ClickSight.addBreadcrumb(action: "Payment API returned 500", category: "network")
+    /// ```
+    public static func addBreadcrumb(action: String, category: String) {
+        guard let core = core else { return }
+        core.addBreadcrumb(action: action, category: category)
     }
     
     // MARK: - Diagnostics
@@ -258,6 +220,12 @@ public final class ClickSight {
     }
     
     // MARK: - Internal
+    
+    /// Internal access for crash handler — needed because NSSetUncaughtExceptionHandler
+    /// captures a C function pointer that can't access private properties
+    internal static var crashReportingCore: ClickSightCore? {
+        return core
+    }
     
     /// Shutdown the SDK (for testing or cleanup)
     static func shutdown() {

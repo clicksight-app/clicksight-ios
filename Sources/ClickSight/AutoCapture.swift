@@ -9,6 +9,9 @@ final class AutoCapture {
     private weak var clickSight: ClickSightCore?
     private let options: ClickSightOptions
     
+    /// Store the previous exception handler so we can chain to it
+    private static var previousExceptionHandler: NSUncaughtExceptionHandler?
+    
     init(clickSight: ClickSightCore, options: ClickSightOptions) {
         self.clickSight = clickSight
         self.options = options
@@ -124,19 +127,24 @@ final class AutoCapture {
     // MARK: - Crash Reporting
     
     private func setupCrashReporting() {
+        // Save previous handler so we can chain to it (e.g. Mapbox, Supabase, Firebase)
+        AutoCapture.previousExceptionHandler = NSGetUncaughtExceptionHandler()
+        
         NSSetUncaughtExceptionHandler { exception in
-            let properties: [String: AnyCodable] = [
-                "$exception_name": AnyCodable(exception.name.rawValue),
-                "$exception_reason": AnyCodable(exception.reason ?? "unknown"),
-                "$exception_stack": AnyCodable(exception.callStackSymbols.joined(separator: "\n"))
-            ]
+            // Send crash report to the dedicated /api/app-analytics/crash endpoint
+            if let core = ClickSight.crashReportingCore {
+                core.sendCrashReport(
+                    crashType: exception.name.rawValue,
+                    message: exception.reason ?? "Unknown exception",
+                    stackTrace: exception.callStackSymbols.joined(separator: "\n"),
+                    isFatal: true
+                )
+            }
             
-            // Try to send crash event synchronously
-            ClickSight.track("$app_crashed", properties: properties.mapValues { $0.value })
-            ClickSight.flush()
-            
-            // Give network request a moment to complete
-            Thread.sleep(forTimeInterval: 2.0)
+            // Chain to previous handler (critical — other SDKs may need this)
+            if let previousHandler = AutoCapture.previousExceptionHandler {
+                previousHandler(exception)
+            }
         }
         
         Logger.log("Crash reporting enabled", level: .debug)

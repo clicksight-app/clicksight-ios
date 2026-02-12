@@ -13,6 +13,14 @@ final class ClickSightCore {
     
     private var superProperties: [String: AnyCodable] = [:]
     
+    /// Breadcrumbs for crash reporting — records recent user actions
+    private var breadcrumbs: [Breadcrumb] = []
+    private let breadcrumbLock = NSLock()
+    private let maxBreadcrumbs = 50
+    
+    /// Background queue for SDK work — never blocks the main thread
+    private let sdkQueue = DispatchQueue(label: "co.clicksight.sdk", qos: .utility)
+    
     init(apiKey: String, options: ClickSightOptions) {
         self.apiKey = apiKey
         self.options = options
@@ -55,12 +63,17 @@ final class ClickSightCore {
         // Start a session
         _ = sessionManager.sessionId
         
-        // Set up automatic capture
-        self.autoCapture = AutoCapture(clickSight: self, options: options)
+        // Set up automatic capture on the main thread (needs UIKit)
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.autoCapture = AutoCapture(clickSight: self, options: options)
+        }
         
-        // Fetch feature flags if enabled
+        // Fetch feature flags on background thread — never block main thread
         if options.enableFeatureFlags {
-            reloadFeatureFlags()
+            sdkQueue.async { [weak self] in
+                self?.reloadFeatureFlags()
+            }
         }
         
         Logger.log("ClickSight SDK initialised successfully", level: .info)
@@ -89,6 +102,9 @@ final class ClickSightCore {
         )
         
         eventQueue.enqueue(clickSightEvent)
+        
+        // Auto-record breadcrumb for crash context
+        addBreadcrumb(action: event, category: "event")
     }
     
     /// Internal tracking (for system events with AnyCodable properties)
@@ -120,6 +136,9 @@ final class ClickSightCore {
             screenProperties[key] = value
         }
         track("$screen_view", properties: screenProperties)
+        
+        // Record screen navigation as breadcrumb
+        addBreadcrumb(action: "Viewed \(name)", category: "navigation")
     }
     
     // MARK: - Identify
@@ -142,7 +161,7 @@ final class ClickSightCore {
         }
         Storage.shared.userTraits = existingTraits
         
-        // Send identify to server
+        // Send identify to server (on background)
         networkManager.sendIdentify(
             distinctId: previousDistinctId,
             userId: userId,
@@ -161,7 +180,9 @@ final class ClickSightCore {
         
         // Reload feature flags with new identity
         if options.enableFeatureFlags {
-            reloadFeatureFlags()
+            sdkQueue.async { [weak self] in
+                self?.reloadFeatureFlags()
+            }
         }
     }
     
@@ -181,7 +202,9 @@ final class ClickSightCore {
         
         // Reload feature flags
         if options.enableFeatureFlags {
-            reloadFeatureFlags()
+            sdkQueue.async { [weak self] in
+                self?.reloadFeatureFlags()
+            }
         }
     }
     
@@ -237,6 +260,66 @@ final class ClickSightCore {
             case .failure(let error):
                 Logger.log("Failed to load feature flags: \(error.localizedDescription)", level: .warning)
             }
+        }
+    }
+    
+    // MARK: - Breadcrumbs
+    
+    /// Add a breadcrumb for crash context
+    func addBreadcrumb(action: String, category: String) {
+        let crumb = Breadcrumb(
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            action: action,
+            category: category
+        )
+        
+        breadcrumbLock.lock()
+        breadcrumbs.append(crumb)
+        if breadcrumbs.count > maxBreadcrumbs {
+            breadcrumbs.removeFirst(breadcrumbs.count - maxBreadcrumbs)
+        }
+        breadcrumbLock.unlock()
+    }
+    
+    /// Get current breadcrumbs (thread-safe copy)
+    func currentBreadcrumbs() -> [Breadcrumb] {
+        breadcrumbLock.lock()
+        defer { breadcrumbLock.unlock() }
+        return breadcrumbs
+    }
+    
+    // MARK: - Crash Reporting
+    
+    /// Send a crash report to the dedicated crash endpoint
+    func sendCrashReport(
+        crashType: String,
+        message: String,
+        stackTrace: String,
+        isFatal: Bool
+    ) {
+        let payload = CrashPayload(
+            apiKey: apiKey,
+            distinctId: Storage.shared.distinctId,
+            crashType: crashType,
+            message: message,
+            stackTrace: stackTrace,
+            isFatal: isFatal,
+            breadcrumbs: currentBreadcrumbs(),
+            context: CrashContext(
+                appVersion: DeviceInfo.shared.appVersion ?? "unknown",
+                os: OSInfo(
+                    name: DeviceInfo.shared.osName,
+                    version: DeviceInfo.shared.osVersion
+                ),
+                device: DeviceDetails(
+                    model: DeviceInfo.shared.deviceModel,
+                    manufacturer: "Apple"
+                )
+            )
+        )
+        
+        networkManager.sendCrash(payload) { success in
+            Logger.log("Crash report sent: \(success)", level: .info)
         }
     }
     
